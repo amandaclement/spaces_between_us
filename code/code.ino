@@ -15,8 +15,8 @@ const int SEQUENCE_CCW[][4] = { // Counterclockwise sequence
   {HIGH, LOW, LOW, LOW}
 };
 
-const int STEPS_PER_REVOLUTION = 2048; // 2048 steps = one full motor revolution
-int step_number;                       // For moving/looping over coils
+int stepNumber;  // For moving/looping over coils
+int currentStep; // For step motor is currently on
 
 // Variables for first ultrasonic sensors
 const int TRIG_PIN_1 = 6;
@@ -28,10 +28,12 @@ const int TRIG_PIN_2 = 3;
 const int ECHO_PIN_2 = 4;  
 int proximity_2, prevProximity_2;
 
-const int MAX_PROXIMITY = 340;    // Maximum proximity value
-const int MIN_STEPS = 400;        // Min steps per proximity change 
-const int MAX_PROXIMITY_DIFF = 8; // Max allowed difference between sensors for values to be considered valid
-const int NOISE_THRESHOLD = 60;   // Max acceptable value before we consider it noise
+const int STEP_LIMIT = 2048;        // Furthest step that motor can land on (2048 steps = one full motor revolution)
+const int MIN_STEPS = 400;          // Min steps per proximity change 
+const int MAX_PROXIMITY_DIFF = 15;  // Max allowed difference between sensors for values to be considered valid
+const int MIN_PROXIMITY_CHANGE = 2; // Min difference needed between previous and current proximity sensor readings to affect motor
+const int NOISE_THRESHOLD = 100;    // Max acceptable value before we consider it noise
+
 
 // Function prototypes
 void rotateStepper(bool);
@@ -53,36 +55,47 @@ void setup() {
   }
 
   // Setup variables
-  step_number = 0;
+  stepNumber = 0;
+  currentStep = 0;
   prevProximity_1 = getProximity(TRIG_PIN_1, ECHO_PIN_1);
   prevProximity_2 = getProximity(TRIG_PIN_2, ECHO_PIN_2);
 }
 
 void loop() {
+  // Get proximity value from each ultrasonic sensor
   proximity_1 = getProximity(TRIG_PIN_1, ECHO_PIN_1);
   proximity_2 = getProximity(TRIG_PIN_2, ECHO_PIN_2);
 
-  if (proximity_1 < NOISE_THRESHOLD && proximity_2 < NOISE_THRESHOLD && abs(proximity_1 - proximity_2) < MAX_PROXIMITY_DIFF && (abs(proximity_1 - prevProximity_1) > 2 || abs(proximity_2 - prevProximity_2) > 2)) {
+//  Serial.print(proximity_1);
+//  Serial.print(", ");
+//  Serial.println(proximity_2);
+
+  // If proximity values aren't too noisy, are close enough in value and haven't increased or decreased too significantly since the previous reading, then use them to rotate the stepper
+  if (proximity_1 < NOISE_THRESHOLD && proximity_2 < NOISE_THRESHOLD && abs(proximity_1 - proximity_2) < MAX_PROXIMITY_DIFF && (abs(proximity_1 - prevProximity_1) > MIN_PROXIMITY_CHANGE || abs(proximity_2 - prevProximity_2) > MIN_PROXIMITY_CHANGE)) {
     int stepCount = 0;
+
+    // If proximity has decreased, rotate stepper clockwise (tighten) unless it has reached its min limit
     if (proximity_1 < prevProximity_1 && proximity_2 < prevProximity_2) {
-        while (stepCount < MIN_STEPS) {
+        while (stepCount < MIN_STEPS && currentStep < STEP_LIMIT) {
           rotateStepper(true);
           stepCount++;
+          currentStep++;
           delay(3);
         }
-    } else if (proximity_1 > prevProximity_1 && proximity_2 > prevProximity_2) {
-        while (stepCount < MIN_STEPS) {
+    } 
+    // Else if proximity has increased, rotate stepper counterclockwise (loosen) unless it has reached its max limit
+    else if (proximity_1 > prevProximity_1 && proximity_2 > prevProximity_2) {
+        while (stepCount < MIN_STEPS && currentStep > 0) {
           rotateStepper(false);
           stepCount++;
+          currentStep--;
           delay(3);
         }
-    } else {
-      delay(3);
-    }
-
+    } 
     prevProximity_1 = getProximity(TRIG_PIN_1, ECHO_PIN_1);
     prevProximity_2 = getProximity(TRIG_PIN_2, ECHO_PIN_2);
-  } else {
+  } 
+  else {
     delay(10);
   }
 }
@@ -100,11 +113,11 @@ void rotateStepper(bool cw) {
 
     // Apply sequence to stepper motor by writing to the coils
     for (int i = 0; i < 4; i++) {
-      digitalWrite(STEPPER_PINS[i], sequence[step_number][i]);
+      digitalWrite(STEPPER_PINS[i], sequence[stepNumber][i]);
     }
   
     // Update step number by cycling in a continuous loop
-    step_number = (step_number + 1) % 4; 
+    stepNumber = (stepNumber + 1) % 4; 
 }
 
 // Function to read proximity value from ultraosnic sensor
