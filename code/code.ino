@@ -16,17 +16,17 @@ const int SEQUENCE_CCW[][4] = { // Counterclockwise sequence
 };
 
 int stepNumber;  // For moving/looping over coils
-int currentStep; // For step motor is currently on
+int currentStep; // For tracking which step motor is currently on
 
-// Variables for first ultrasonic sensors
-const int TRIG_PIN_1 = 6;
-const int ECHO_PIN_1 = 7;  
-int proximity_1, prevProximity_1;
+// Variables for ultrasonic sensors
+//const int TRIG_PIN_1 = 6, ECHO_PIN_1 = 7, TRIG_PIN_2 = 5, ECHO_PIN_2 = 4, TRIG_PIN_3 = 3, ECHO_PIN_3 = 2;
+//int proximity_1, prevProximity_1, proximity_2, prevProximity_2, proximity_3, prevProximity_3;
 
-// Varibables for second ultrasonic sensor
-const int TRIG_PIN_2 = 3;
-const int ECHO_PIN_2 = 4;  
-int proximity_2, prevProximity_2;
+const int NUM_SENSORS = 3;
+const int TRIG_PINS[] = {3,5,6};
+const int ECHO_PINS[] = {2,4,7};
+int proximities[3];
+int prevProximities[3];
 
 const int STEP_LIMIT = 2048;        // Furthest step that motor can land on (2048 steps = one full motor revolution)
 const int MIN_STEPS = 400;          // Min steps per proximity change 
@@ -34,48 +34,46 @@ const int MAX_PROXIMITY_DIFF = 15;  // Max allowed difference between sensors fo
 const int MIN_PROXIMITY_CHANGE = 2; // Min difference needed between previous and current proximity sensor readings to affect motor
 const int NOISE_THRESHOLD = 100;    // Max acceptable value before we consider it noise
 
-
 // Function prototypes
 void rotateStepper(bool);
 int getProximity(int, int);
 int mapValue(float, float, float, float);
+bool checkNoise(const int[]);
+bool checkMaxSensorDiff(const int[]);
+bool checkMinProximityChange(const int[], const int[]);
+bool checkProximityDec(const int[], const int[]);
+bool checkProximityInc(const int[], const int[]);
 
 void setup() {
   Serial.begin(9600);
   
-  // Set pin modes
-  pinMode(TRIG_PIN_1, OUTPUT);
-  pinMode(ECHO_PIN_1, INPUT);
-
-  pinMode(TRIG_PIN_2, OUTPUT);
-  pinMode(ECHO_PIN_2, INPUT);
+  // Set pin modes and variables
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    pinMode(TRIG_PINS[i], OUTPUT);
+    pinMode(ECHO_PINS[i], INPUT);
+    prevProximities[i] = getProximity(TRIG_PINS[i], ECHO_PINS[i]);
+  }
   
   for (int i = 0; i < 4; i++) {
     pinMode(STEPPER_PINS[i], OUTPUT);
   }
-
-  // Setup variables
+  
   stepNumber = 0;
   currentStep = 0;
-  prevProximity_1 = getProximity(TRIG_PIN_1, ECHO_PIN_1);
-  prevProximity_2 = getProximity(TRIG_PIN_2, ECHO_PIN_2);
 }
 
 void loop() {
   // Get proximity value from each ultrasonic sensor
-  proximity_1 = getProximity(TRIG_PIN_1, ECHO_PIN_1);
-  proximity_2 = getProximity(TRIG_PIN_2, ECHO_PIN_2);
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    proximities[i] = getProximity(TRIG_PINS[i], ECHO_PINS[i]);
+  }
 
-//  Serial.print(proximity_1);
-//  Serial.print(", ");
-//  Serial.println(proximity_2);
-
-  // If proximity values aren't too noisy, are close enough in value and haven't increased or decreased too significantly since the previous reading, then use them to rotate the stepper
-  if (proximity_1 < NOISE_THRESHOLD && proximity_2 < NOISE_THRESHOLD && abs(proximity_1 - proximity_2) < MAX_PROXIMITY_DIFF && (abs(proximity_1 - prevProximity_1) > MIN_PROXIMITY_CHANGE || abs(proximity_2 - prevProximity_2) > MIN_PROXIMITY_CHANGE)) {
+  // If all tests are passed, rotate the motor
+  if (checkNoise(proximities) && checkMaxSensorDiff(proximities) && checkMinProximityChange(proximities, prevProximities)) {
     int stepCount = 0;
 
-    // If proximity has decreased, rotate stepper clockwise (tighten) unless it has reached its min limit
-    if (proximity_1 < prevProximity_1 && proximity_2 < prevProximity_2) {
+    // If proximity has decreased, rotate stepper clockwise (tighten) unless it has reached min limit
+    if (checkProximityDec(proximities, prevProximities)) {
         while (stepCount < MIN_STEPS && currentStep < STEP_LIMIT) {
           rotateStepper(true);
           stepCount++;
@@ -83,8 +81,8 @@ void loop() {
           delay(3);
         }
     } 
-    // Else if proximity has increased, rotate stepper counterclockwise (loosen) unless it has reached its max limit
-    else if (proximity_1 > prevProximity_1 && proximity_2 > prevProximity_2) {
+    // Else if proximity has increased, rotate stepper counterclockwise (loosen) unless it has reached max limit
+    else if (checkProximityInc(proximities, prevProximities)) {
         while (stepCount < MIN_STEPS && currentStep > 0) {
           rotateStepper(false);
           stepCount++;
@@ -92,8 +90,9 @@ void loop() {
           delay(3);
         }
     } 
-    prevProximity_1 = getProximity(TRIG_PIN_1, ECHO_PIN_1);
-    prevProximity_2 = getProximity(TRIG_PIN_2, ECHO_PIN_2);
+    for (int i = 0; i < NUM_SENSORS; i++) {
+      prevProximities[i] = getProximity(TRIG_PINS[i], ECHO_PINS[i]);
+    }
   } 
   else {
     delay(10);
@@ -137,4 +136,56 @@ int getProximity(int triggerPin, int echoPin) {
 // Function for range mapping
 int mapValue(float x, float in_min, float in_max, float out_min, float out_max) {
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+
+// Function that returns false only if too much noise (or distance) is detected with any of the ultrasonic sensors
+bool checkNoise(const int proximities[]) {
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    if (proximities[i] > NOISE_THRESHOLD) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Function that returns false only if there is too large a discrepency in readings across any two sensors
+bool checkMaxSensorDiff(const int proximities[]) {
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    for (int j = i+1; j < NUM_SENSORS; j++) {
+      if (abs(proximities[i] - proximities[j]) > MAX_PROXIMITY_DIFF) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+// Function that returns false only if difference between previous and current proximity readings on any individual sensor is too small (and therefore considered too insignificant)
+bool checkMinProximityChange(const int proximities[], const int prevProximities[]) {
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    if (abs(proximities[i] - prevProximities[i]) > MIN_PROXIMITY_CHANGE) {
+      return true;
+    }
+  }
+  return false;  
+}
+
+// Function that returns true only if proximity on all sensors has decreased
+bool checkProximityDec(const int proximities[], const int prevProximities[]) {
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    if (proximities[i] >= prevProximities[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Function that returns true only if proximity on all sensors has increased
+bool checkProximityInc(const int proximities[], const int prevProximities[]) {
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    if (proximities[i] <= prevProximities[i]) {
+      return false;
+    }
+  }
+  return true;
 }
